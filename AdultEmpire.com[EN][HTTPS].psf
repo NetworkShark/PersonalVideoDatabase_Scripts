@@ -1,0 +1,912 @@
+//This version of script is for use with PVD versions 0.9.9.16 and above!!!
+
+(*
+* Original code for 0.1.2.0 by Gazonkfoo
+* 0.1.2.1 Modded 12/20/2013	by Aimhere				- add option to exclude back cover images per a flag in constants section
+* 0.1.2.2 Modded 02/18/2015	by pra15				- due to ADE website changes (see forum)
+* 0.1.2.3 Modded 06/27/2015	by pra15				- due to ADE search results changes (see forum)
+* 0.1.2.4 Modded 07/05/2015	by Aimhere				- slight change in ADE search results page HTML
+* 0.1.2.5 Modded 07/08/2015	by pra15				- change method to find URL in search results
+* 0.1.2.6 Modded 08/09/2015	by Aimhere				- script was no longer finding Tagline/Description, Customer Rating
+* 0.1.2.7 Modded 08/09/2015	by Aimhere				- script was not finding Genre/Studio/Duration/Release Date, list of actors had extra/bad entries, director name was messed up, infinite loop if Producer was present, Release Date not saved
+* 0.1.2.8 Modded 02/22/2017	by Aimhere				- was not finding Year, Tagline, Description due to ADE website changes; duration was not being calculated correctly; duration was not being saved to correct XML field
+* 0.1.2.9 Modded 02/22/2017	by Ivek23				- due to ADE website URL changes (see forum)
+* 0.1.3.0 Modded 12/31/2017	by Aimhere				- more ADE website HTML changes
+* 0.2.0.0 Modded 10/15/2023	by NetworkShark			- Rewritten for use with curl [HTTPS workaround] and adaptation to new website
+* 0.2.1.0 Modded 10/16/2023	by NetworkShark			- Bugfixing folder temp.
+* 0.2.2.0 Modded 10/16/2023	by NetworkShark			- Added the limit at search pages.
+* 0.2.3.0 Modded 10/18/2023	by NetworkShark & Ivek	- Bugfixing + Create tmp folder only if necessary
+* 0.2.4.0 Modded 10/19/2023	by NetworkShark & Ivek	- Bugfixing
+* 0.2.5.0 Modded 10/20/2023	by Ivek & NetworkShark	- Bugfixing + Set Genre to Adult
+* 0.2.5.1 Modded 10/21/2023	by NetworkShark & Ivek	- Bugfixing
+*)
+
+//Some useful constants
+const
+	//Script types
+	stMovies	= 0;
+	stPeople	= 1; 
+	stPoster	= 2;
+  
+	//Script modes
+	smSearch	= 0; 
+	smNormal	= 1;
+	smPoster	= 2;
+	smDummy		= 3;
+ 
+	//Parse results
+	prError		= 0; 
+	prFinished	= 1;
+	prList		= 2;
+	prListImage	= 3;
+	prDownload	= 4;
+  
+	//Credits types
+	ctActors	= 0;
+	ctDirectors	= 1;
+	ctWriters	= 2;
+	ctComposers	= 3;
+	ctProducers	= 4;
+	
+	//Image types
+	imPoster		= 0;
+	imScreenshoot	= 1;
+	imFrontCover	= 2;
+	imDiscImage		= 3;
+	imPhoto			= 4;
+  
+	//Script data 
+	//This version of script is for use with PVD versions 0.9.9.16 and above!!!
+
+	SCRIPT_VERSION	= '0.2.5.1';
+	SCRIPT_NAME		= '[EN][HTTPS]adultempire.com';
+	SCRIPT_DESC		= '[EN] Get movie information from adultempire.com';
+	SCRIPT_LANG		= $09; //English
+	SCRIPT_TYPE		= stMovies;
+ 
+	BASE_URL		= 'http://www.adultempire.com';
+	BASE_URL_HTTPS	= 'https://www.adultempire.com';
+	RATING_NAME		= 'ADE';
+
+	BASE_SEARCH			= BASE_URL + '/allsearch/search';
+	SEARCH_STR  		= BASE_SEARCH + '?pageSize=48&q=%s&view=list';
+	MAX_SEARCH_PAGES	= 10;
+ 
+	CODE_PAGE	= 0; //65001 UTF-8 - Use 0 for Autodetect
+
+	USER_AGENT	= 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:95.0) Gecko/20100101 Firefox/95.0';
+	
+	INTERNET_TEST_ITERATIONS	= 20;  //Attempts before to alert user that not internet connection detected. Increase if the provider has low speed.
+	INTERNET_WAIT_TIMING		= 500;
+	
+	BASE_DOWNLOAD	= 'tmp\';
+	
+//Global variables 
+var
+	Mode: Byte;
+	DummyUrl, LastUrl, SearchResultIndex: String;
+	idxSearchPage: Integer;
+ 
+// HTTPS Functions
+function EscapeUriToFileName(URL: AnsiString):String;
+var
+	outputFilePath: String;
+begin
+	outputFilePath := StringReplace(URL, 'https://', '', True, True, False);
+	outputFilePath := StringReplace(outputFilePath, 'http://', '', True, True, False);
+	outputFilePath := StringReplace(outputFilePath, '/', '_', True, True, False);
+	outputFilePath := StringReplace(outputFilePath, ':', '_', True, True, False);
+	outputFilePath := StringReplace(outputFilePath, '?', '_', True, True, False);
+	outputFilePath := StringReplace(outputFilePath, '+', '_', True, True, False);
+	outputFilePath := StringReplace(outputFilePath, '&', '_', True, True, False);
+	outputFilePath := StringReplace(outputFilePath, '=', '_', True, True, False);
+	while Pos('__', outputFilePath)>0 do
+	begin
+		outputFilePath := StringReplace(outputFilePath, '__', '_', True, True, False);
+	end;
+	Result := outputFilePath;
+end;
+
+function DownloadItem(URL:AnsiString; OutputPath: String; Async: Boolean):Integer;
+var
+	i: integer;
+	CredentialPath: String;
+begin
+	if (not FileExists(GetAppPath() + BASE_DOWNLOAD + 'not-delete.me')) then
+	begin
+		FileExecute('cmd', ' /C if not exist ' + BASE_DOWNLOAD + ' mkdir ' + BASE_DOWNLOAD);
+		wait (500);
+		StringToFile(GetAppPath() + BASE_DOWNLOAD + 'not-delete.me', 'Questo file serve solo a verificare l''esistenza della folder.' + #13#10 + 'Nel caso mancasse verrà ricreato automaticamente', false, false);
+	end;
+	CredentialPath := BASE_DOWNLOAD + 'AdultDVDEmpire_cred.txt';
+	if (Length(Trim(URL))>1) then
+	begin
+		if (Pos(' ', URL) > 0) then begin
+			URL := StringReplace(URL, ' ', '%20', True, True, False);
+		end;
+		if not(FileExists(OutputPath)) then
+		begin
+			FileExecute('cmd', '/Q /C start /min curl -s -L -k -b "' + CredentialPath + '" -c "' + CredentialPath + '" -A "' + USER_AGENT + '" "' + URL + '" -o "' + OutputPath + '"');
+			if (not Async) then begin
+				while not(FileExists(OutputPath)) do
+				begin
+					wait (INTERNET_WAIT_TIMING);
+					i:=i+1;
+					If i=INTERNET_TEST_ITERATIONS then
+					begin	//In the images download the scritp can not ask to the user for internet conexion because perhaps the file doesnt exist.
+						LogMessage('	FAIL TO DOWNLOAD ITEM: ' + URL);
+						Result := 0;
+						exit;
+					end;
+				end;
+			end;
+			Result := 1;
+		end else begin
+			Result := 2; // File Exist!
+		end;
+	end else
+		Result := 0;
+end;
+
+function DownloadPage(URL:AnsiString; IsDummyFile:Boolean; Async: Boolean):String;
+var
+	outputFilePath: String;
+	ret: Integer;
+begin
+	outputFilePath := GetAppPath() + BASE_DOWNLOAD + EscapeUriToFileName(URL);
+	if (Pos('htm', outputFilePath) <= 0) then
+		outputFilePath := outputFilePath + '.html';
+	if (IsDummyFile) then
+	begin
+		outputFilePath := outputFilePath + '.dummy';
+		StringToFile(outputFilePath, URL, False, False);
+		Result := outputFilePath;
+	end else
+	begin
+		ret := DownloadItem(URL, outputFilePath, Async);
+		if (ret > 0) then
+		begin
+			Result := outputFilePath;
+			if ((not Async) and (ret = 1)) then begin
+				wait (1500);
+			end;
+		end else
+		begin
+			Result := '';
+		end;
+	end;
+end;
+
+function DownloadImage(URL:AnsiString):String;
+var
+	outputFilePath: String;
+begin
+	LogMessage('DownloadImage: ' + URL);
+	outputFilePath := GetAppPath() + BASE_DOWNLOAD + EscapeUriToFileName(URL);
+	if DownloadItem(URL, outputFilePath, true) > 0 then
+	begin
+		Result := outputFilePath;
+	end else
+	begin
+		Result := '';
+	end;
+end;
+
+//PVD Required Functions
+function GetScriptVersion: String;
+begin
+	Result := SCRIPT_VERSION;
+end;
+function GetScriptName: String;
+begin
+	Result := SCRIPT_NAME;
+end;
+function GetScriptDesc: String;
+begin
+	Result := SCRIPT_DESC;
+end;
+function GetBaseURL: AnsiString;
+begin
+	LogMessage('Called GetBaseURL');
+	Result := '';
+end;
+function GetScriptLang: Cardinal;
+begin
+	Result := SCRIPT_LANG;
+end;
+function GetScriptType: Byte; 
+begin
+	LogMessage('Called GetScriptType');
+	Result := SCRIPT_TYPE;
+end;
+function GetCurrentMode: Byte; 
+begin
+	LogMessage('Called GetCurrentMode');
+	Result := Mode;
+	if (Result = smSearch) then begin
+		LogMessage('GetCurrentMode: Search');
+	end else	if (Result = smNormal) then begin
+		LogMessage('GetCurrentMode: Normal');
+	end else	if (Result = smPoster) then begin
+		LogMessage('GetCurrentMode: Poster');
+	end else	if (Result = smDummy) then begin
+		LogMessage('GetCurrentMode: Dummy');
+	end else begin
+		LogMessage('GetCurrentMode: ' + IntToStr(Mode));
+	end;
+end;
+function GetCodePage: Cardinal;
+begin
+	LogMessage('Called GetCodePage');
+	Result := CODE_PAGE;
+end;
+function ProcException(Exception: String; Msg: String): AnsiString;
+begin
+	LogMessage('EXCEPTION!');
+	LogMessage('message: ' + Msg);
+	Result := '';
+end;
+function GetDownloadURL: AnsiString;
+var
+	urlNum, idx: Integer;
+	field, searchStr, url, tmp: String;
+	urls: TWIDEARRAY;
+begin
+	LogMessage('Called GetDownloadURL - Mode: ' + IntToStr(Mode));
+	if (Mode = smSearch) then
+	begin
+		url := '';
+		searchStr := StringReplace(BASE_URL, 'http://', '', true, true, true);
+		field := GetFieldValueXML('url');
+		if (Length(field) > 0) then
+		begin
+			urlNum := ExplodeString(field, urls, ' ');
+			if (urlNum > 1) then
+			begin
+				for idx := 0 To urlNum do
+				begin
+					tmp := Trim(StringReplace(urls[idx], 'https', 'http', true, true, true));
+					if (Pos(searchStr, tmp) > 0) then
+					begin
+						url := tmp;
+						LastUrl := url;
+						Mode := smNormal;
+						break;
+					end;
+				end;
+			end else if (urlNum > 0) then
+				url := Trim(StringReplace(field, 'https', 'http', true, true, true));
+				LastUrl := url;
+				Mode := smNormal;
+			begin
+			end;
+		end;
+		if (Length(url) <= 0) then
+			url := StringReplace(SEARCH_STR, '%s', StringReplace(GetFieldValueXML('title'), ' ', '%20', true, false, true), true, false, true);
+		Result := DownloadPage(url, false, false);
+	end else if (Mode = smNormal) then
+	begin
+		if (Length(DummyUrl) > 0) then begin
+			LastUrl := DummyUrl;
+			Result := DownloadPage(DummyUrl, false, false);
+		end else begin
+			Result := '';
+		end;
+	end else begin
+		LogMessage('Unknown Mode: ' + IntToStr(Mode));
+	end;
+	LogMessage(' * DownloadURL: ' +#13#10+ url +'||'+' * Mode: '+ IntToStr(Mode));
+end;
+
+function GetTitleSearchResult(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp: String;
+begin
+	tmp := 'Label="Title">'
+	curPos := Pos(tmp, HTML) + Length(tmp);
+	endPos := PosFrom('</', HTML, curPos);
+	if ((curPos > Length(tmp)) and (endPos > 0)) then
+	begin
+		Result := Trim(HTMLToText(Copy(HTML, curPos, endPos - curPos)));
+	end else begin
+		Result := ''
+	end;
+end;
+function GetYearSearchResult(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp: String;
+begin
+	tmp := '<small>('
+	curPos := Pos(tmp, HTML) + Length(tmp);
+	if (curPos > Length(tmp)) then
+	begin
+		endPos := PosFrom(')</', HTML, curPos);
+		tmp := Trim(Copy(HTML, curPos, endPos - curPos));
+		if (Length(tmp) > 0) then begin
+			Result := tmp;
+		end else begin
+			Result := '-0';
+		end;
+	end else begin
+		Result := '-0';
+	end;
+end;
+function GetUrlSearchResult(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp: String;
+begin
+	tmp := '<a href="'
+	curPos := Pos(tmp, HTML) + Length(tmp);
+	endPos := PosFrom('"', HTML, curPos);
+	tmp := Trim(Copy(HTML, curPos, endPos - curPos));
+	if (Pos('http', tmp) <= 0) then
+		tmp := BASE_URL + tmp;
+	Result := tmp;
+	LogMessage(' * ParseSearchResult: ' +#13#10+ tmp); 
+end;
+function GetStudioSearchResult(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp: String;
+begin
+	tmp := '<small>studio</small>'
+	curPos := Pos(tmp, HTML) + Length(tmp);
+	endPos := PosFrom('</', HTML, curPos);
+	Result := Trim(HTMLToText(Copy(HTML, curPos, endPos - curPos)));
+end;
+function GetCoverSearchResult(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp: String;
+begin
+	tmp := 'data-src="'
+	curPos := Pos(tmp, HTML) + Length(tmp);
+	endPos := PosFrom('"', HTML, curPos);
+	Result := Trim(Copy(HTML, curPos, endPos - curPos));
+end;
+function GetNextPage(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp, searchStr: String;
+begin
+	LogMessage('Called GetNextPage');
+	searchStr := '<ul class="pagination">'
+	curPos := Pos(searchStr, HTML) + Length(searchStr);
+	if (curPos <= Length(searchStr)) then begin
+		Result := '';
+	end else begin
+		endPos := PosFrom('</ul>', HTML, curPos);
+		tmp := Trim(Copy(HTML, curPos, endPos - curPos));
+		searchStr := '<li';
+		curPos := LastPos(searchStr, tmp) + Length(searchStr);
+		endPos := PosFrom('</li>', HTML, curPos);
+		tmp := Trim(Copy(tmp, curPos, endPos - curPos));
+		if (Pos('class="disabled"', tmp) > 0) then begin
+			Result := '';
+		end else begin
+			searchStr := 'href="';
+			curPos := Pos(searchStr, tmp) + Length(searchStr);
+			endPos := PosFrom('"', tmp, curPos);
+			tmp := Trim(Copy(tmp, curPos, endPos - curPos));
+			tmp := StringReplace(tmp, '&amp;', '&', true, true, true);
+			LogMessage(' **** NextPage: ' +tmp+' *');
+			Result := BASE_SEARCH + tmp;
+		end;
+	end;
+end;
+
+function ParseSearchResults(HTML: string; URL: AnsiString): Cardinal;
+var
+	curPos, endPos, maxI: Integer;
+	row, rowSearch, searchResult: String;
+begin
+	LogMessage('Called ParseSearchResults');
+	Result := prError;
+	curPos := Pos('<div class="item-list">', HTML);
+	endPos := PosFrom('<div class="list-footer spacing-bottom">', HTML, curPos);
+	if (endPos <= 0) then
+		endPos := PosFrom('<div class="site_footer">', HTML, curPos);
+	// LogMessage('*** ParseSearchResults: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+	// StringToFile(GetAppPath() + '\tmp\debug.html', HTML, false, false);
+	HTML := Trim(Copy(HTML, curPos, endPos - curPos));
+	// StringToFile(GetAppPath() + '\tmp\debug.html', HTML, false, false);
+
+	maxI := 0;
+	rowSearch := '<div class="row list-view-item';
+	curPos := Pos(rowSearch, HTML);
+	endPos := PosFrom(rowSearch, HTML, curPos + Length(rowSearch));
+	if ((curPos > 0) and (curPos < Length(HTML)) and (endPos = 0)) then begin
+		endPos := Length(HTML);
+	end;
+	while ((curPos > 0) and (curPos < endPos)) do
+	begin
+		// LogMessage('*** ParseSearchResults: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+		row := Trim(Copy(HTML, curPos, endPos - curPos));
+		// LogMessage('**** ParseSearchResults:' + #13#10 + row);
+		searchResult := GetTitleSearchResult(row) + '|' + GetStudioSearchResult(row) + '|' + GetYearSearchResult(row);
+		if (Pos('|', searchResult) > 1) then
+		begin
+			if (Length(SearchResultIndex) > 0) then begin
+				if (Pos(searchResult, SearchResultIndex) <= 0) then begin
+					searchResult := searchResult + '|' + GetUrlSearchResult(row) + '|' + GetCoverSearchResult(row);
+					SearchResultIndex := SearchResultIndex + #13#10 + searchResult;
+				end;
+			end else begin
+				searchResult := searchResult + '|' + GetUrlSearchResult(row) + '|' + GetCoverSearchResult(row);
+				SearchResultIndex := searchResult;
+			end;
+		end;
+		maxI := maxI + 1;
+		curPos := endPos;
+		if (endPos <> Length(HTML)) then begin
+			endPos := PosFrom(rowSearch, HTML, curPos + Length(rowSearch));
+			if ((curPos > 0) and (curPos < Length(HTML)) and (endPos = 0)) then begin
+				endPos := Length(HTML);
+			end;
+		end;
+	end;
+	if (maxI > 1) then begin
+		Result := prListImage;
+	end else if (maxI > 0) then begin
+		Result := prDownload
+	end;
+end;
+
+function ParseSearchResultIndex(): Cardinal;
+var
+	rows, cols: TWIDEARRAY;
+	rNum, cNum, idx: Integer;
+	maxI: Integer;
+begin
+	LogMessage('Called ParseSearchResultIndex');
+	Result := prError;
+	maxI := 0;
+	// StringToFile('tmp\debug.html', SearchResultIndex, false, false);
+	if (Pos(#13#10, SearchResultIndex) > 0) then	begin
+		rNum := ExplodeString(SearchResultIndex, rows, #13#10);
+	end else begin
+		rNum := 0;
+	end;
+	LogMessage(' * ParseSearchResultIndex: rNum: ' + IntToStr(rNum));
+	if (rNum > 1) then begin
+		for idx := Low(rows) To High(rows) do begin
+			//LogMessage(' *** ParseSearchResultIndex: ' + rows[idx]);
+			LogMessage(' *** ParseSearchResultIndex: rows: ' + StringReplace(rows[idx], '|', ' | ', True, True, False));
+			if (Pos('|', rows[idx]) > 0) then
+			begin
+				cNum := ExplodeString(rows[idx], cols, '|');
+				if (cols[2] = '-0') then
+					cols[2] := '';
+				AddSearchResult(cols[0], cols[1], cols[2], DownloadPage(cols[3], true, false), DownloadImage(cols[4]));
+				//LogMessage(' * ParseSearchResultIndex: ' +'#'+IntToStr(maxI)+#13#10+ cols[0] +'||'+#13#10+ cols[1] +'||'+#13#10+ cols[2] +'||'+#13#10+ DownloadPage(cols[3], true, false)); 
+				LogMessage(' * ParseSearchResultIndex: ' +'#'+IntToStr(maxI)+#13#10+ cols[0] +'||'+#13#10+ cols[1] +'|| '+ cols[2] +' ||'+#13#10+ DownloadPage(cols[3], true, false));
+				maxI := maxI + 1;
+				LogMessage(' ** ParseSearchResultIndex: ' +'#'+IntToStr(maxI));
+			end;
+		end;
+		Result := prListImage;
+	end else begin
+		cNum := ExplodeString(SearchResultIndex, cols, '|');
+		Result := prDownload;		
+		DummyUrl := cols[3];
+	end;	
+end;
+
+function GetMovieTitle(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	LogMessage('Called GetMovieTitle');
+	searchStr := '<h1 class="movie-page__heading__title">';
+	curPos := Pos(searchStr, page);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);
+		endPos := PosFrom('<', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
+	LogMessage('GetMovieTitle: ' + Result);
+end;
+function GetMovieStudio(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	LogMessage('Called GetMovieStudio');
+	searchStr := 'Label="Studio">';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	if (curPos > Length(searchStr)) then begin
+		endPos := PosFrom('<', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
+end;
+function GetMovieYear(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	LogMessage('Called GetMovieYear');
+	curPos := Pos('Label="Studio">', page);
+	searchStr := '<small>(';
+	curPos := PosFrom(searchStr, page, curPos);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);
+		endPos := PosFrom(')</', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
+end;
+function GetMovieFrontCover(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	LogMessage('Called GetMovieFrontCover');
+	searchStr := '<img src="';
+	curPos := Pos(searchStr, page);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);
+		endPos := PosFrom('"', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
+end;
+function GetMovieBackCover(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	LogMessage('Called GetMovieBackCover');
+	curPos := Pos('<i class="fa fa-search-plus"', page);
+	if (curPos > 0) then begin
+		searchStr := '></i></span></a><a href="';
+		curPos := PosFrom(searchStr, page, curPos);
+		if (curPos > 0) then begin
+			curPos := curPos + Length(searchStr);
+			endPos := PosFrom('"', page, curPos);
+			Result := Trim(Copy(page, curPos, endPos - curPos));
+		end else begin
+			Result := '';
+		end;
+	end;
+end;
+function GetMoviePerformer(page: String; role: integer): TWIDEARRAY;
+var
+	ret: TWIDEARRAY;
+	tmp, searchStr, name, image, url: String;
+	curPos, endPos: integer;
+begin
+	searchStr := 'href="';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	endPos := PosFrom('"', page, curPos);
+	url := BASE_URL + Trim(Copy(page, curPos, endPos - curPos));
+	searchStr := '<div class="hover-popover-container">';
+	curPos := PosFrom(searchStr, page, endPos) + Length(searchStr);
+	if (curPos <= Length(searchStr)) then
+	begin
+		searchStr := 'Label="Performer">'
+		curPos := PosFrom(searchStr, page, endPos) + Length(searchStr);
+	end;
+	endPos := PosFrom('<', page, curPos);
+	if (endPos <= 0) then
+		endPos := Length(page);
+	name := Trim(StringReplace(StringReplace(StringReplace(Copy(page, curPos, endPos - curPos), #13#10, '', true, true, false), #10, '', true, true, false), #09, '', true, true, false));
+	if (endPos < Length(page)) then
+	begin
+		searchStr := 'src="';
+		curPos := PosFrom(searchStr, page, endPos) + Length(searchStr);
+		endPos := PosFrom('"', page, curPos);
+		image := Trim(Copy(page, curPos, endPos - curPos));
+		tmp := name + '|' + url + '|' + image;
+	end else begin
+		tmp := name + '|' + url;
+	end;
+	ExplodeString(tmp, ret, '|');
+	Result := ret;
+end;
+function ParseMovieCasts(page: String): Integer;
+var
+	performer: TWIDEARRAY;
+	curPos, endPos, idx: integer;
+begin
+	curPos := Pos('<div class="movie-page__content-tags__performers', page);
+	endPos := PosFrom('<div class="movie-page__content-tags__directors', page, curPos);
+	if (endPos < 1) OR (EndPos > PosFrom('<div class="movie-page__content-tags__categories', page, curPos)) then
+		endPos := PosFrom('<div class="movie-page__content-tags__categories', page, curPos);
+	page := StringReplace(Trim(Copy(page, curPos, endPos - curPos)), '&nbsp;', '', true, true, true);
+	curPos := Pos('<a', page);
+	endPos := PosFrom('</a>', page, curPos);
+	while ((curPos > 0) and (curPos < endPos)) do begin
+		performer := GetMoviePerformer(Copy(page, curPos, endPos - curPos), ctActors);
+		AddMoviePerson(performer[0], '', 'Actor', performer[1], ctActors);
+		idx := idx + 1;
+		curPos := PosFrom('<a', page, endPos);
+		endPos := PosFrom('</a>', page, curPos);
+	end;
+	Result := idx;
+end;
+function __ParseMovieDirector(page: String): integer;
+var
+	director: TWIDEARRAY;
+	name, url: String;
+	curPos, endPos: integer;
+begin
+	curPos := Pos('<div class="movie-page__content-tags__directors m-b-1">', page);
+	if (curPos > 0) then begin
+		endPos := PosFrom('<div class="movie-page__content-tags__categories m-b-1">', page, curPos);
+		page := Trim(Copy(page, curPos, endPos - curPos));
+		director := GetMoviePerformer(page, ctDirectors);
+		name := director[0];
+		url := director[1];
+		curPos := 1;
+		// LogMessage('* ParseMovieDirector: ' + #13#10 + page);
+		// LogMessage('* ParseMovieDirector: ' + HTMLValues2(page, '<div class="movie-page__content-tags__directors m-b-1">', '</div>', '<a href="', '</a>', ' | ', curPos));
+		// curPos := 1;
+		// LogMessage('* ParseMovieDirector: ' + HTMLValues(page, '<div class="movie-page__content-tags__directors m-b-1">', '</div>', '<a href="', '"', ' | ', curPos));
+		AddMoviePerson(name, '', 'Director', url, ctDirectors);
+		Result := 1;
+	end;
+end;
+function ParseMovieDirector(page: String): integer;
+var
+	names, urls: TWIDEARRAY;
+	name, url, searchStr: String;
+	curPos, endPos, idx: integer;
+begin
+	idx := 0;
+	curPos := Pos('<div class="movie-page__content-tags__directors m-b-1">', page);
+	if (curPos > 0) then begin
+		endPos := PosFrom('<div class="movie-page__content-tags__categories m-b-1">', page, curPos);
+		page := Trim(Copy(page, curPos, endPos - curPos));
+		// LogMessage('*** ParseMovieDirector: ' + #13#10 + page);
+		searchStr := '<a href="';
+		curPos := Pos(searchStr, page) + Length(searchStr);
+		endPos := PosFrom('</a>', page, curPos);
+		// LogMessage('** ParseMovieDirector: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+		while ((curPos > Length(searchStr)) and (curPos < endPos)) do
+		begin
+			url := BASE_URL + Trim(Copy(page, curPos, PosFrom('"', page, curPos) - curPos));
+			// LogMessage('** ParseMovieDirector: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(PosFrom('"', page, curPos)));
+			curPos := PosFrom('>', page, curPos) + 1;
+			name := Trim(HTMLToText(Copy(page, curPos, endPos - curPos)));
+			// LogMessage('** ParseMovieDirector: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(PosFrom('"', page, curPos)));
+			LogMessage('* ParseMovieDirector: name: ' + name + ' | url: ' + url);
+			AddMoviePerson(name, '', 'Director', url, ctDirectors);
+			idx := idx + 1;
+			curPos := PosFrom(searchStr, page, endPos) + Length(searchStr);
+			endPos := PosFrom('</a>', page, curPos);
+		end;
+	end;
+	Result := idx;
+end;
+function GetMovieCategories(page: String): String;
+var
+	curPos, endPos, idx: integer;
+begin
+	Result := '';
+	curPos := Pos('<strong>Categories:</strong>', page);
+	curPos := PosFrom('<a', page, curPos);
+	endPos := PosFrom('</div>', page, curPos);
+	page := Trim(Copy(page, curPos, endPos - curPos));
+	curPos := Pos('>', page) + 1;
+	endPos := PosFrom('<', page, curPos);
+	while ((curPos > 1) and (curPos < endPos) and (idx < 10)) do begin
+		if (Length(Result) > 0) then
+			Result := Result + ', ';
+		Result := Result + Trim(Copy(page, curPos, endPos - curPos));
+		curPos := PosFrom('<a', page, endPos);
+		if (curPos > 0) then
+		begin
+			curPos := PosFrom('>', page, curPos) + 1;
+			endPos := PosFrom('<', page, curPos);
+			idx := idx + 1;
+		end;
+	end;
+end;
+function GetMovieSynopsis(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	LogMessage('Called GetMovieSynopsis');
+	searchStr := '<div class="synopsis-content">';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	if (curPos > Length(searchStr)) then
+	begin
+		endPos := PosFrom('</div>', page, curPos);
+		// LogMessage('** GetMovieSynopsis: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+		// StringToFile(GetAppPath() + '\tmp\debug.html', page, false, false);
+		Result := Trim(HTMLToText(Copy(page, curPos, endPos - curPos)));
+		// LogMessage('GetMovieSynopsis: ' + Result);
+		Result := stringreplace(result, '<i>', '', true, false, true);
+		result := stringreplace(result, '</i>', '', true, false, true);
+		Result := stringreplace(result, '<p>', '', true, false, true);
+		result := stringreplace(result, '</p>', '', true, false, true);
+		result := stringreplace(result, '<strong>', '', true, false, true);
+		result := StringReplace(Result, '</strong>', '', true, false, true);
+	end else
+	begin
+		Result := '';
+	end;
+end;
+function GetMovieRating(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	searchStr := '<small>Rating: </small>';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	endPos := PosFrom('</li>', page, curPos);
+	Result := Trim(Copy(page, curPos, endPos - curPos));
+	//LogMessage('GetMovieRating: ' + Result);
+end;
+
+function GetMovieLength(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	searchStr := '<small>Length: </small>';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	endPos := PosFrom('</li>', page, curPos);
+	Result := Trim(Copy(page, curPos, endPos - curPos));
+	//LogMessage('GetMovieLength:  ' + Result);
+end;
+function GetMovieReleased(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	searchStr := '<small>Released:</small>';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	endPos := PosFrom('</li>', page, curPos);
+	Result := Trim(Copy(page, curPos, endPos - curPos));
+	//LogMessage('GetMovieReleased: ' + Result);
+end;
+function GetMovieProductionYear(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	searchStr := '<small>Production Year:</small>';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	endPos := PosFrom('</li>', page, curPos);
+	Result := Trim(Copy(page, curPos, endPos - curPos));
+	//LogMessage('GetMovieProductionYear: ' + Result);
+end;
+function GetMovieEmpireSKU(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	searchStr := '<small>Empire SKU: </small>';
+	curPos := Pos(searchStr, page) + Length(searchStr);
+	endPos := PosFrom('</li>', page, curPos);
+	Result := Trim(Copy(page, curPos, endPos - curPos));
+	//LogMessage('GetMovieEmpireSKU:  ' + Result);
+end;
+
+function ParseMoviePage(HTML: String): Cardinal;
+var
+	retStr: String;
+	curPos, endPos: integer;
+begin
+	Result := prError;
+	LogMessage('Called ParseMoviePage');
+	curPos := Pos('<div id="content">', HTML);
+	endPos := PosFrom('<div class="site_footer">', HTML, curPos);
+	HTML := Trim(Copy(HTML, curPos, endPos - curPos));
+	retStr := GetMovieTitle(HTML);
+	AddFieldValueXML('origtitle', retStr);
+	LogMessage('GetMovieTitle => ' + retStr);
+	retStr := GetMovieYear(HTML);
+	AddFieldValueXML('year', retStr);
+	LogMessage('GetMovieYear => ' + retStr);
+	retStr := GetMovieFrontCover(HTML);
+	AddImageURL(imPoster, DownloadImage(retStr));
+	AddImageURL(imFrontCover, DownloadImage(retStr));
+	LogMessage('GetMovieFrontCover => ' + retStr);
+	LogMessage('ParseMovieCasts => ' + IntToStr(ParseMovieCasts(HTML)));
+	LogMessage('ParseMovieDirector => ' + IntToStr(ParseMovieDirector(HTML)));
+	retStr := GetMovieStudio(HTML);
+	AddFieldValueXML('studio', retStr);
+	LogMessage('GetMovieStudio => ' + retStr);
+	retStr := GetMovieRating(HTML);
+	AddFieldValueXML('rating', retStr);
+	AddCustomFieldValueByName('ADE Rating',retStr);
+	LogMessage('GetMovieRating => ' + retStr);
+	
+	retStr := GetMovieReleased(HTML);
+	AddCustomFieldValueByName('ADE Released',retStr);
+	LogMessage('GetMovieReleased => ' + retStr);
+	retStr := GetMovieProductionYear(HTML);
+	AddCustomFieldValueByName('ADE ProductionYear',retStr);
+	LogMessage('GetMovieProductionYear => ' + retStr);
+	retStr := GetMovieEmpireSKU(HTML);
+	AddFieldValueXML('code', retStr);
+	AddCustomFieldValueByName('ADE EmpireSKU',retStr);
+	LogMessage('GetMovieEmpireSKU => ' + retStr);
+	retStr := GetMovieLength(HTML);
+	AddCustomFieldValueByName('ADE Length',retStr);
+	LogMessage('GetMovieLength => ' + retStr);	
+	
+	retStr := GetMovieCategories(HTML);
+	AddFieldValueXML('category', retStr);
+	LogMessage('GetMovieCategories => ' + retStr);
+	retStr := GetMovieSynopsis(HTML);
+	AddFieldValueXML('description', retStr);
+	LogMessage('GetMovieSynopsis => ' + retStr);
+	retStr := GetMovieBackCover(HTML);
+	AddImageURL(imDiscImage, DownloadImage(retStr));
+	LogMessage('GetMovieBackCover => ' + retStr);
+	AddFieldValueXML('genre', 'Adult');
+	AddFieldValueXML('url', LastUrl);
+end;
+procedure ParsePageRercurse(HTML: string; URL: AnsiString);
+begin
+	if (Mode = smSearch) then
+	begin
+		LogMessage('Called ParsePage - Search Mode');
+		if ((Length(URL) > 0) and (Length(HTML) <= 0)) then begin
+			HTML := FileToString(DownloadPage(URL, false, false));
+			URL := '';
+		end;
+		ParseSearchResults(HTML, URL);
+		idxSearchPage := idxSearchPage + 1;
+		LogMessage('* Page searched: ' + IntToStr(idxSearchPage) + ' *');
+		if (idxSearchPage < MAX_SEARCH_PAGES) then
+			URL := GetNextPage(HTML);
+		if (Length(URL) > 0) then begin
+			ParsePageRercurse('', URL);
+		end;
+	end;
+end;
+function ParsePage(HTML: string; URL: AnsiString): Cardinal;
+begin
+	Result := prError;
+	if (Mode = smSearch) then
+	begin
+		LogMessage('Called ParsePage - Search Mode');
+		if ((Length(URL) > 0) and (Length(HTML) <= 0)) then begin
+			HTML := FileToString(DownloadPage(URL, false, false));
+			URL := '';
+		end;
+		ParseSearchResults(HTML, URL);
+		idxSearchPage := idxSearchPage + 1;
+		LogMessage('* Page searched: ' + IntToStr(idxSearchPage) + ' *');
+		if (idxSearchPage < MAX_SEARCH_PAGES) then
+			URL := GetNextPage(HTML);
+		if (Length(URL) > 0) then begin
+			ParsePageRercurse('', URL);
+		end;
+		Result := ParseSearchResultIndex();
+		if (Result = prDownload) then begin
+			Mode := smNormal;
+		end else begin
+			Mode := smDummy;
+		end;
+	end else if (Mode = smDummy) then		
+	begin
+		LogMessage('Called ParsePage - Dummy Mode');
+		DummyUrl := HTML;
+		Mode := smNormal;
+		Result := prDownload;
+	end else if (Mode = smNormal) then		
+	begin
+		LogMessage('Called ParsePage - Normal Mode');
+		Result := ParseMoviePage(HTML);
+		Result := prFinished;
+		LogMessage('Finish');
+	end else begin
+		LogMessage('Called ParsePage with:' + #13#10 + '  Mode: ' + IntToStr(Mode) + #13#10 + '  URL: ' + URL + #13#10 + '  HTML:' + #13#10 + HTML);
+	end;
+end;

@@ -19,6 +19,7 @@
 * 0.2.4.0 Modded 10/19/2023	by NetworkShark & Ivek	- Bugfixing
 * 0.2.5.0 Modded 10/20/2023	by Ivek & NetworkShark	- Bugfixing + Set Genre to Adult
 * 0.2.5.1 Modded 10/21/2023	by NetworkShark & Ivek	- Bugfixing
+* 0.2.6.0 Modded 10/22/2023	by NetworkShark			- Rewrote the function for extracting director data and removed code from other functions previously used
 *)
 
 //Some useful constants
@@ -58,7 +59,7 @@ const
 	//Script data 
 	//This version of script is for use with PVD versions 0.9.9.16 and above!!!
 
-	SCRIPT_VERSION	= '0.2.5.1';
+	SCRIPT_VERSION	= '0.2.6.0';
 	SCRIPT_NAME		= '[EN][HTTPS]adultempire.com';
 	SCRIPT_DESC		= '[EN] Get movie information from adultempire.com';
 	SCRIPT_LANG		= $09; //English
@@ -633,28 +634,6 @@ begin
 		endPos := PosFrom('</a>', page, curPos);
 	end;
 	Result := idx;
-end;
-function __ParseMovieDirector(page: String): integer;
-var
-	director: TWIDEARRAY;
-	name, url: String;
-	curPos, endPos: integer;
-begin
-	curPos := Pos('<div class="movie-page__content-tags__directors m-b-1">', page);
-	if (curPos > 0) then begin
-		endPos := PosFrom('<div class="movie-page__content-tags__categories m-b-1">', page, curPos);
-		page := Trim(Copy(page, curPos, endPos - curPos));
-		director := GetMoviePerformer(page, ctDirectors);
-		name := director[0];
-		url := director[1];
-		curPos := 1;
-		// LogMessage('* ParseMovieDirector: ' + #13#10 + page);
-		// LogMessage('* ParseMovieDirector: ' + HTMLValues2(page, '<div class="movie-page__content-tags__directors m-b-1">', '</div>', '<a href="', '</a>', ' | ', curPos));
-		// curPos := 1;
-		// LogMessage('* ParseMovieDirector: ' + HTMLValues(page, '<div class="movie-page__content-tags__directors m-b-1">', '</div>', '<a href="', '"', ' | ', curPos));
-		AddMoviePerson(name, '', 'Director', url, ctDirectors);
-		Result := 1;
-	end;
 end;
 function ParseMovieDirector(page: String): integer;
 var

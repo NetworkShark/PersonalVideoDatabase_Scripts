@@ -20,6 +20,8 @@
 * 0.2.5.0 Modded 10/20/2023	by Ivek & NetworkShark	- Bugfixing + Set Genre to Adult
 * 0.2.5.1 Modded 10/21/2023	by NetworkShark & Ivek	- Bugfixing
 * 0.2.6.0 Modded 10/22/2023	by NetworkShark			- Rewrote the function for extracting director data and removed code from other functions previously used
+* 0.2.7.0 Modded 10/25/2023	by Ivek23				- Bugfixing & Adding functions
+* 0.2.7.1 Modded 10/25/2023	by NetworkShark & Ivek	- Bugfixing
 *)
 
 //Some useful constants
@@ -59,7 +61,7 @@ const
 	//Script data 
 	//This version of script is for use with PVD versions 0.9.9.16 and above!!!
 
-	SCRIPT_VERSION	= '0.2.6.0';
+	SCRIPT_VERSION	= '0.2.7.1';
 	SCRIPT_NAME		= '[EN][HTTPS]adultempire.com';
 	SCRIPT_DESC		= '[EN] Get movie information from adultempire.com';
 	SCRIPT_LANG		= $09; //English
@@ -85,8 +87,8 @@ const
 //Global variables 
 var
 	Mode: Byte;
-	DummyUrl, LastUrl, SearchResultIndex: String;
 	idxSearchPage: Integer;
+	DummyUrl, LastUrl, SearchResultIndex, MovieID: String;
  
 // HTTPS Functions
 function EscapeUriToFileName(URL: AnsiString):String;
@@ -348,6 +350,19 @@ begin
 	Result := tmp;
 	LogMessage(' * ParseSearchResult: ' +#13#10+ tmp); 
 end;
+function GetUrlMovieIDSearchResult(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp: String;
+begin
+	tmp := '<a href="'	
+	curPos := Pos(tmp, HTML) + Length(tmp)+1;
+	endPos := PosFrom('/', HTML, curPos);	
+	tmp := Trim(Copy(HTML, curPos, endPos - curPos));		
+	Result := tmp;
+	LogMessage(' * ParseSearchResults - MovieID: ' + tmp);	
+end;
+(*
 function GetStudioSearchResult(HTML: string): AnsiString;
 var
 	curPos, endPos: Integer;
@@ -357,6 +372,28 @@ begin
 	curPos := Pos(tmp, HTML) + Length(tmp);
 	endPos := PosFrom('</', HTML, curPos);
 	Result := Trim(HTMLToText(Copy(HTML, curPos, endPos - curPos)));
+end;
+*)
+function GetStudioSearchResult(HTML: string): AnsiString;
+var
+	curPos, endPos: Integer;
+	tmp: String;
+begin
+	tmp := '<small>studio</small>'
+	curPos := Pos(tmp, HTML) + Length(tmp);
+	if (curPos > Length(tmp)) then
+	begin
+		endPos := PosFrom('</', HTML, curPos);
+		tmp := Trim(Copy(HTML, curPos, endPos - curPos));
+		if (Length(tmp) > 0) then begin
+			Result := tmp;
+		end else begin
+			Result := '-0';
+		end;
+	end else begin
+		Result := '-0';
+	end;	
+	//LogMessage(' * GetStudioSearchResult: ' +#13#10+ Result);
 end;
 function GetCoverSearchResult(HTML: string): AnsiString;
 var
@@ -459,8 +496,7 @@ end;
 function ParseSearchResultIndex(): Cardinal;
 var
 	rows, cols: TWIDEARRAY;
-	rNum, cNum, idx: Integer;
-	maxI: Integer;
+	rNum, cNum, idx, maxI, debug_pos1: Integer;
 begin
 	LogMessage('Called ParseSearchResultIndex');
 	Result := prError;
@@ -481,9 +517,21 @@ begin
 				cNum := ExplodeString(rows[idx], cols, '|');
 				if (cols[2] = '-0') then
 					cols[2] := '';
-				AddSearchResult(cols[0], cols[1], cols[2], DownloadPage(cols[3], true, false), DownloadImage(cols[4]));
+				// AddSearchResult(cols[0], cols[1], cols[2], DownloadPage(cols[3], true, false), DownloadImage(cols[4]));
 				//LogMessage(' * ParseSearchResultIndex: ' +'#'+IntToStr(maxI)+#13#10+ cols[0] +'||'+#13#10+ cols[1] +'||'+#13#10+ cols[2] +'||'+#13#10+ DownloadPage(cols[3], true, false)); 
+				AddSearchResult(cols[0], '', cols[2], DownloadPage(cols[3], true, false), DownloadImage(cols[4]));
+				//AddSearchResult(cols[0], cols[1], cols[2], DownloadPage(cols[3], true, false), DownloadImage(cols[4]));					
 				LogMessage(' * ParseSearchResultIndex: ' +'#'+IntToStr(maxI)+#13#10+ cols[0] +'||'+#13#10+ cols[1] +'|| '+ cols[2] +' ||'+#13#10+ DownloadPage(cols[3], true, false));
+					MovieID := cols[3];
+					MovieID := StringReplace(MovieID, 'http://www.adultempire.com/', '', True, True, False);
+					LogMessage('**** ParseSearchResults - MovieID*:' + MovieID);
+					debug_pos1:=Pos('/',MovieID);
+					if debug_pos1 >0 then MovieID:=Copy(MovieID,0,debug_pos1-1);	
+					LogMessage(' ** ParseSearchResults - MovieID:' + MovieID);						
+				AddSearchResult(cols[0], '', cols[2], cols[3], '');
+				AddSearchResult('  #'+IntToStr(maxI)+'  '+#8729+' Just to check the website: ',MovieID+' / '+cols[1],'',cols[3],'');
+				AddSearchResult(' ====== ','','','','');
+				LogMessage(' * ParseSearchResultIndex2: ' +'#'+IntToStr(maxI)+#13#10+ cols[1] +'|| '+ MovieID +' ||'+#13#10+ cols[3]);								
 				maxI := maxI + 1;
 				LogMessage(' ** ParseSearchResultIndex: ' +'#'+IntToStr(maxI));
 			end;
@@ -535,7 +583,8 @@ var
 begin
 	LogMessage('Called GetMovieYear');
 	curPos := Pos('Label="Studio">', page);
-	searchStr := '<small>(';
+	//searchStr := '<small>(';
+	searchStr := '</a> &nbsp; <small>(';
 	curPos := PosFrom(searchStr, page, curPos);
 	if (curPos > 0) then begin
 		curPos := curPos + Length(searchStr);
@@ -589,17 +638,24 @@ begin
 	searchStr := 'href="';
 	curPos := Pos(searchStr, page) + Length(searchStr);
 	endPos := PosFrom('"', page, curPos);
+	LogMessage('** GetMoviePerformer - page:' + #13#10 + page);
+	LogMessage('** GetMoviePerformer - url: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
 	url := BASE_URL + Trim(Copy(page, curPos, endPos - curPos));
 	searchStr := '<div class="hover-popover-container">';
 	curPos := PosFrom(searchStr, page, endPos) + Length(searchStr);
 	if (curPos <= Length(searchStr)) then
 	begin
-		searchStr := 'Label="Performer">'
+		searchStr := 'Label="Performer">';
 		curPos := PosFrom(searchStr, page, endPos) + Length(searchStr);
+		if (curPos <= Length(searchStr)) then
+		begin
+			curPos := Pos('>', page) + 1;
+		end;
 	end;
 	endPos := PosFrom('<', page, curPos);
 	if (endPos <= 0) then
 		endPos := Length(page);
+	LogMessage('** GetMoviePerformer - name: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
 	name := Trim(StringReplace(StringReplace(StringReplace(Copy(page, curPos, endPos - curPos), #13#10, '', true, true, false), #10, '', true, true, false), #09, '', true, true, false));
 	if (endPos < Length(page)) then
 	begin
@@ -619,25 +675,32 @@ var
 	performer: TWIDEARRAY;
 	curPos, endPos, idx: integer;
 begin
+	idx := 0;
 	curPos := Pos('<div class="movie-page__content-tags__performers', page);
-	endPos := PosFrom('<div class="movie-page__content-tags__directors', page, curPos);
-	if (endPos < 1) OR (EndPos > PosFrom('<div class="movie-page__content-tags__categories', page, curPos)) then
-		endPos := PosFrom('<div class="movie-page__content-tags__categories', page, curPos);
-	page := StringReplace(Trim(Copy(page, curPos, endPos - curPos)), '&nbsp;', '', true, true, true);
-	curPos := Pos('<a', page);
-	endPos := PosFrom('</a>', page, curPos);
-	while ((curPos > 0) and (curPos < endPos)) do begin
-		performer := GetMoviePerformer(Copy(page, curPos, endPos - curPos), ctActors);
-		AddMoviePerson(performer[0], '', 'Actor', performer[1], ctActors);
-		idx := idx + 1;
-		curPos := PosFrom('<a', page, endPos);
+	if (curPos > 0) then
+	begin
+		endPos := PosFrom('<div class="movie-page__content-tags__directors', page, curPos);
+		if (endPos < 1) OR (endPos > PosFrom('<div class="movie-page__content-tags__categories', page, curPos)) then
+			endPos := PosFrom('<div class="movie-page__content-tags__categories', page, curPos);
+		if (endPos < 1) and (PosFrom('<div class="movie-page__content-tags__categories', page, curPos) < 1) then
+			endPos := PosFrom('<div class="col-sm-9 col-md-8 col-lg-9">', page, curPos);
+		page := StringReplace(Trim(Copy(page, curPos, endPos - curPos)), '&nbsp;', '', true, true, true);
+		curPos := Pos('<a', page);
 		endPos := PosFrom('</a>', page, curPos);
+		while ((curPos > 0) and (curPos < endPos)) do begin
+			LogMessage('** ParseMovieCasts: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+			performer := GetMoviePerformer(Copy(page, curPos, endPos - curPos), ctActors);
+			LogMessage('* ParseMovieCasts: name: ' + performer[0] + ' | url: ' + performer[1]);
+			AddMoviePerson(performer[0], '', 'Actor', performer[1], ctActors);
+			idx := idx + 1;
+			curPos := PosFrom('<a', page, endPos);
+			endPos := PosFrom('</a>', page, curPos);
+		end;
 	end;
 	Result := idx;
 end;
 function ParseMovieDirector(page: String): integer;
 var
-	names, urls: TWIDEARRAY;
 	name, url, searchStr: String;
 	curPos, endPos, idx: integer;
 begin
@@ -706,12 +769,18 @@ begin
 		// StringToFile(GetAppPath() + '\tmp\debug.html', page, false, false);
 		Result := Trim(HTMLToText(Copy(page, curPos, endPos - curPos)));
 		// LogMessage('GetMovieSynopsis: ' + Result);
-		Result := stringreplace(result, '<i>', '', true, false, true);
-		result := stringreplace(result, '</i>', '', true, false, true);
-		Result := stringreplace(result, '<p>', '', true, false, true);
-		result := stringreplace(result, '</p>', '', true, false, true);
-		result := stringreplace(result, '<strong>', '', true, false, true);
-		result := StringReplace(Result, '</strong>', '', true, false, true);
+		Result := StringReplace(Result, 'Includes:</p><p><i>', 'Includes:<br>', true, false, true);
+		Result := StringReplace(Result, '**', ' ** ', true, false, true);
+		Result := StringReplace(Result, '<i>', '', true, false, true);
+		Result := StringReplace(Result, '</i>', '', true, false, true);
+		Result := StringReplace(Result, '<p>', #10, true, false, true);
+		Result := StringReplace(Result, '</p>', #13, true, false, true);
+		Result := StringReplace(Result, '<strong>', '', true, false, true);
+		Result := StringReplace(Result, '</strong>', '', true, false, true);
+		Result := StringReplace(Result, '<br/>', '', true, false, true);
+		Result := StringReplace(Result, '<br />', '', true, false, true);
+		Result := StringReplace(Result, 'br/>', '', true, false, true);
+		Result := StringReplace(Result, 'br />', '', true, false, true);
 	end else
 	begin
 		Result := '';
@@ -723,10 +792,33 @@ var
 	curPos, endPos: integer;
 begin
 	searchStr := '<small>Rating: </small>';
-	curPos := Pos(searchStr, page) + Length(searchStr);
-	endPos := PosFrom('</li>', page, curPos);
-	Result := Trim(Copy(page, curPos, endPos - curPos));
+	//curPos := Pos(searchStr, page) + Length(searchStr);
+	curPos := PosFrom(searchStr, page, curPos);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);		
+		endPos := PosFrom('</li>', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
 	//LogMessage('GetMovieRating: ' + Result);
+end;
+
+function GetMovieRatings(page: String): String;
+var
+	searchStr: String;
+	curPos, endPos: integer;
+begin
+	searchStr := '<span class="movie-page__heading__rating-stars rating-stars"><span class="rating-stars-avg">';
+	curPos := PosFrom(searchStr, page, curPos);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);		
+		endPos := PosFrom('</span><span class="rating-stars-container">', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
+	//LogMessage('GetMovieRatings: ' + Result);
 end;
 
 function GetMovieLength(page: String): String;
@@ -735,9 +827,15 @@ var
 	curPos, endPos: integer;
 begin
 	searchStr := '<small>Length: </small>';
-	curPos := Pos(searchStr, page) + Length(searchStr);
-	endPos := PosFrom('</li>', page, curPos);
-	Result := Trim(Copy(page, curPos, endPos - curPos));
+	// curPos := Pos(searchStr, page) + Length(searchStr);
+	curPos := PosFrom(searchStr, page, curPos);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);
+		endPos := PosFrom('</li>', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;	
 	//LogMessage('GetMovieLength:  ' + Result);
 end;
 function GetMovieReleased(page: String): String;
@@ -746,9 +844,15 @@ var
 	curPos, endPos: integer;
 begin
 	searchStr := '<small>Released:</small>';
-	curPos := Pos(searchStr, page) + Length(searchStr);
+	// curPos := Pos(searchStr, page) + Length(searchStr);
+	curPos := PosFrom(searchStr, page, curPos);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);
 	endPos := PosFrom('</li>', page, curPos);
 	Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
 	//LogMessage('GetMovieReleased: ' + Result);
 end;
 function GetMovieProductionYear(page: String): String;
@@ -757,9 +861,14 @@ var
 	curPos, endPos: integer;
 begin
 	searchStr := '<small>Production Year:</small>';
-	curPos := Pos(searchStr, page) + Length(searchStr);
-	endPos := PosFrom('</li>', page, curPos);
-	Result := Trim(Copy(page, curPos, endPos - curPos));
+	curPos := PosFrom(searchStr, page, curPos);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);	
+		endPos := PosFrom('</li>', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
 	//LogMessage('GetMovieProductionYear: ' + Result);
 end;
 function GetMovieEmpireSKU(page: String): String;
@@ -768,9 +877,15 @@ var
 	curPos, endPos: integer;
 begin
 	searchStr := '<small>Empire SKU: </small>';
-	curPos := Pos(searchStr, page) + Length(searchStr);
-	endPos := PosFrom('</li>', page, curPos);
-	Result := Trim(Copy(page, curPos, endPos - curPos));
+	//curPos := Pos(searchStr, page) + Length(searchStr);
+	curPos := PosFrom(searchStr, page, curPos);
+	if (curPos > 0) then begin
+		curPos := curPos + Length(searchStr);
+		endPos := PosFrom('</li>', page, curPos);
+		Result := Trim(Copy(page, curPos, endPos - curPos));
+	end else begin
+		Result := '';
+	end;
 	//LogMessage('GetMovieEmpireSKU:  ' + Result);
 end;
 
@@ -783,6 +898,7 @@ begin
 	LogMessage('Called ParseMoviePage');
 	curPos := Pos('<div id="content">', HTML);
 	endPos := PosFrom('<div class="site_footer">', HTML, curPos);
+	//LogMessage(' * ParseMoviePage * :' +#13#10+ Trim(Copy(HTML, curPos-1, endPos - curPos)));
 	HTML := Trim(Copy(HTML, curPos, endPos - curPos));
 	retStr := GetMovieTitle(HTML);
 	AddFieldValueXML('origtitle', retStr);
@@ -804,6 +920,9 @@ begin
 	AddCustomFieldValueByName('ADE Rating',retStr);
 	LogMessage('GetMovieRating => ' + retStr);
 	
+	retStr := GetMovieRatings(HTML);
+	AddFieldValueXML('rating', retStr);
+	AddCustomFieldValueByName('ADE Ratings',retStr);	
 	retStr := GetMovieReleased(HTML);
 	AddCustomFieldValueByName('ADE Released',retStr);
 	LogMessage('GetMovieReleased => ' + retStr);
@@ -811,7 +930,6 @@ begin
 	AddCustomFieldValueByName('ADE ProductionYear',retStr);
 	LogMessage('GetMovieProductionYear => ' + retStr);
 	retStr := GetMovieEmpireSKU(HTML);
-	AddFieldValueXML('code', retStr);
 	AddCustomFieldValueByName('ADE EmpireSKU',retStr);
 	LogMessage('GetMovieEmpireSKU => ' + retStr);
 	retStr := GetMovieLength(HTML);

@@ -22,6 +22,7 @@
 * 0.2.6.0 Modded 10/22/2023	by NetworkShark			- Rewrote the function for extracting director data and removed code from other functions previously used
 * 0.2.7.0 Modded 10/25/2023	by Ivek23				- Bugfixing & Adding functions
 * 0.2.7.1 Modded 10/25/2023	by NetworkShark & Ivek	- Bugfixing
+* 0.2.7.2 Modded 10/25/2023	by NetworkShark & Ivek	- Bugfixing: actor url generate duplicates on people views
 *)
 
 //Some useful constants
@@ -61,7 +62,7 @@ const
 	//Script data 
 	//This version of script is for use with PVD versions 0.9.9.16 and above!!!
 
-	SCRIPT_VERSION	= '0.2.7.1';
+	SCRIPT_VERSION	= '0.2.7.2';
 	SCRIPT_NAME		= '[EN][HTTPS]adultempire.com';
 	SCRIPT_DESC		= '[EN] Get movie information from adultempire.com';
 	SCRIPT_LANG		= $09; //English
@@ -522,18 +523,17 @@ begin
 				AddSearchResult(cols[0], '', cols[2], DownloadPage(cols[3], true, false), DownloadImage(cols[4]));
 				//AddSearchResult(cols[0], cols[1], cols[2], DownloadPage(cols[3], true, false), DownloadImage(cols[4]));					
 				LogMessage(' * ParseSearchResultIndex: ' +'#'+IntToStr(maxI)+#13#10+ cols[0] +'||'+#13#10+ cols[1] +'|| '+ cols[2] +' ||'+#13#10+ DownloadPage(cols[3], true, false));
-					MovieID := cols[3];
-					MovieID := StringReplace(MovieID, 'http://www.adultempire.com/', '', True, True, False);
-					LogMessage('**** ParseSearchResults - MovieID*:' + MovieID);
-					debug_pos1:=Pos('/',MovieID);
-					if debug_pos1 >0 then MovieID:=Copy(MovieID,0,debug_pos1-1);	
-					LogMessage(' ** ParseSearchResults - MovieID:' + MovieID);						
-				AddSearchResult(cols[0], '', cols[2], cols[3], '');
-				AddSearchResult('  #'+IntToStr(maxI)+'  '+#8729+' Just to check the website: ',MovieID+' / '+cols[1],'',cols[3],'');
-				AddSearchResult(' ====== ','','','','');
-				LogMessage(' * ParseSearchResultIndex2: ' +'#'+IntToStr(maxI)+#13#10+ cols[1] +'|| '+ MovieID +' ||'+#13#10+ cols[3]);								
+				MovieID := cols[3];
+				MovieID := StringReplace(MovieID, 'http://www.adultempire.com/', '', True, True, False);
+				LogMessage('**** ParseSearchResults - MovieID*:' + MovieID);
+				debug_pos1:=Pos('/',MovieID);
+				if debug_pos1 >0 then MovieID:=Copy(MovieID,0,debug_pos1-1);	
+				LogMessage(' ** ParseSearchResults - MovieID:' + MovieID);						
+				// AddSearchResult(cols[0], '', cols[2], cols[3], '');
+				// AddSearchResult('  #'+IntToStr(maxI)+'  '+#8729+' Just to check the website: ',MovieID+' / '+cols[1],'',cols[3],'');
+				// AddSearchResult(' ====== ','','','','');
+				LogMessage(' ** ParseSearchResultIndex: ' +'#'+IntToStr(maxI) + #13#10 + cols[1] +'|| '+ MovieID +' ||'+#13#10+ cols[3]);
 				maxI := maxI + 1;
-				LogMessage(' ** ParseSearchResultIndex: ' +'#'+IntToStr(maxI));
 			end;
 		end;
 		Result := prListImage;
@@ -638,9 +638,12 @@ begin
 	searchStr := 'href="';
 	curPos := Pos(searchStr, page) + Length(searchStr);
 	endPos := PosFrom('"', page, curPos);
-	LogMessage('** GetMoviePerformer - page:' + #13#10 + page);
-	LogMessage('** GetMoviePerformer - url: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+	// LogMessage('** GetMoviePerformer - page:' + #13#10 + page);
+	// LogMessage('** GetMoviePerformer - url: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
 	url := BASE_URL + Trim(Copy(page, curPos, endPos - curPos));
+	url := StringReplace(url, 'porn-videos/', '', false, false, false);
+	url := StringReplace(url, 'rental/', '', false, false, false);
+	url := StringReplace(url, 'used/', '', false, false, false);
 	searchStr := '<div class="hover-popover-container">';
 	curPos := PosFrom(searchStr, page, endPos) + Length(searchStr);
 	if (curPos <= Length(searchStr)) then
@@ -655,7 +658,7 @@ begin
 	endPos := PosFrom('<', page, curPos);
 	if (endPos <= 0) then
 		endPos := Length(page);
-	LogMessage('** GetMoviePerformer - name: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+	// LogMessage('** GetMoviePerformer - name: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
 	name := Trim(StringReplace(StringReplace(StringReplace(Copy(page, curPos, endPos - curPos), #13#10, '', true, true, false), #10, '', true, true, false), #09, '', true, true, false));
 	if (endPos < Length(page)) then
 	begin
@@ -717,6 +720,9 @@ begin
 		while ((curPos > Length(searchStr)) and (curPos < endPos)) do
 		begin
 			url := BASE_URL + Trim(Copy(page, curPos, PosFrom('"', page, curPos) - curPos));
+			url := StringReplace(url, 'porn-videos/', '', false, false, false);
+			url := StringReplace(url, 'rental/', '', false, false, false);
+			url := StringReplace(url, 'used/', '', false, false, false);
 			// LogMessage('** ParseMovieDirector: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(PosFrom('"', page, curPos)));
 			curPos := PosFrom('>', page, curPos) + 1;
 			name := Trim(HTMLToText(Copy(page, curPos, endPos - curPos)));

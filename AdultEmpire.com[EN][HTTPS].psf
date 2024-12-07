@@ -23,6 +23,9 @@
 * 0.2.7.0 Modded 10/25/2023	by Ivek23				- Bugfixing & Adding functions
 * 0.2.7.1 Modded 10/25/2023	by NetworkShark & Ivek	- Bugfixing
 * 0.2.7.2 Modded 10/25/2023	by NetworkShark & Ivek	- Bugfixing: actor url generate duplicates on people views
+* 0.2.7.3 Modded 10/26/2024 by NetworkShark			- Bugfixing: handled if search movie return no results
+* 0.2.8.0 Modded 10/26/2024 by NetworkShark			- Added function to bypass Age Confermation on GetLogin
+* 0.2.9.0 Modded 11/XX/2024 by NetworkShark			- Added function to remove old files
 *)
 
 //Some useful constants
@@ -62,7 +65,7 @@ const
 	//Script data 
 	//This version of script is for use with PVD versions 0.9.9.16 and above!!!
 
-	SCRIPT_VERSION	= '0.2.7.2';
+	SCRIPT_VERSION	= '0.2.9.0';
 	SCRIPT_NAME		= '[EN][HTTPS]adultempire.com';
 	SCRIPT_DESC		= '[EN] Get movie information from adultempire.com';
 	SCRIPT_LANG		= $09; //English
@@ -83,14 +86,129 @@ const
 	INTERNET_TEST_ITERATIONS	= 20;  //Attempts before to alert user that not internet connection detected. Increase if the provider has low speed.
 	INTERNET_WAIT_TIMING		= 500;
 	
-	BASE_DOWNLOAD	= 'tmp\';
+	BASE_DOWNLOAD			= 'tmp\';
+	FILE_INDEX_DOWNLOAD		= 'adultempire_single_index.list';
+	MAX_OLD_DOWNLOAD_DIFF	= 5; // in minutes
 	
 //Global variables 
 var
 	Mode: Byte;
 	idxSearchPage: Integer;
 	DummyUrl, LastUrl, SearchResultIndex, MovieID: String;
- 
+
+function minutesDiff(timeA, timeB: String): Integer;
+var
+	separator: String;
+	hourA, hourB, minA, minB, secA, secB: Integer;
+	tmpDate: TWIDEARRAY;
+begin
+	// LogMessage('minutesDiff: timeA: ' + timeA + ', timeB: ' + timeB);
+	separator := ':';
+	
+	ExplodeString(timeA, tmpDate, separator);
+	hourA :=  StrToInt(tmpDate[0]);
+	minA := StrToInt(tmpDate[1]);
+	secA := StrToInt(tmpDate[2]);
+	// LogMessage('minutesDiff: hourA: ' + IntToStr(hourA) + ', minA: ' + IntToStr(minA) + ', secA: ' + IntToStr(secA));
+	
+	ExplodeString(timeB, tmpDate, separator);
+	hourB := StrToInt(tmpDate[0]);
+	minB := StrToInt(tmpDate[1]);
+	secB := StrToInt(tmpDate[2]);
+	// LogMessage('minutesDiff: hourB: ' + IntToStr(hourB) + ', minB: ' + IntToStr(minB) + ', secB: ' + IntToStr(secB));
+	
+	Result := Integer(((hourA - hourB) * 3600 + (minA - minB) * 60 + (secA - secB)) / 60);
+end;
+
+function compareDates(dateA, dateB: String): Boolean;
+var
+	separator: String;
+	yearA, yearB, monthA, monthB, dayA, dayB: Integer;
+	tmpDate: TWIDEARRAY;
+begin
+	separator := '-';
+	
+	ExplodeString(dateA, tmpDate, separator);
+	yearA :=  StrToInt(tmpDate[0]);
+	monthA := StrToInt(tmpDate[1]);
+	dayA := StrToInt(tmpDate[2]);
+	
+	ExplodeString(dateB, tmpDate, separator);
+	yearB :=  StrToInt(tmpDate[0]);
+	monthB := StrToInt(tmpDate[1]);
+	dayB := StrToInt(tmpDate[2]);
+	
+	Result := (yearA = yearB) And (monthA = monthB) And (dayA = dayB);
+end;
+
+procedure CleanTmp();
+var
+	rowCount, colCount, rowIdx, filesNotDeleted, diff: Integer;
+	indexFilePath, listFiles, curDate, curTime, newListFiles: String;
+	rows, cols: TWIDEARRAY;
+begin
+	LogMessage('Called CleanTmp');
+	indexFilePath := GetAppPath() + BASE_DOWNLOAD + FILE_INDEX_DOWNLOAD;
+	if (FileExists(indexFilePath)) then
+	begin
+		newListFiles := '';
+		filesNotDeleted := 0;
+		curDate := DateToStr(CurrentDateTime()); 
+		curTime := TimeToStr(CurrentDateTime());
+		// LogMessage('CleanTmp: DateTime: ' + curDate + ' ' + curTime);
+		listFiles := FileToString(indexFilePath);
+		// LogMessage('CleanTmp: listFiles: ' + #13#10 + listFiles);
+		if (Length(listFiles) > 0) then
+		begin
+			rowCount := ExplodeString(listFiles, rows, #13#10);
+			// LogMessage('CleanTmp: rowCount: '+ IntToStr(rowCount));
+			if (rowCount > 0) then
+			begin
+				for rowIdx := 0 To rowCount-1 do
+				begin
+					colCount := ExplodeString(rows[rowIdx], cols, '|');
+					// LogMessage('CleanTmp: rowIdx: '+ IntToStr(rowIdx));
+					if (colCount > 2) then
+					begin
+						if (FileExists(cols[2])) then
+						begin
+							diff := minutesDiff(curTime, cols[1]);
+							if ((Not compareDates(curDate, cols[0])) Or (diff > MAX_OLD_DOWNLOAD_DIFF)) then
+							begin
+								LogMessage('CleanTmp: remove: '+ cols[2]);
+								FileExecute('cmd', ' /C del /Q /F ' + cols[2]);
+							end else
+							begin
+								LogMessage('CleanTmp: skip time (' + IntToStr(diff) + '): '+ cols[2]);
+								newListFiles := newListFiles + rows[rowIdx] + #13#10;
+								filesNotDeleted := filesNotDeleted + 1;
+							end;
+						end else
+						begin						
+							LogMessage('CleanTmp: skip NOT exists: '+ cols[2]);
+						end;
+					end;
+				end;
+			end;
+		end;
+		if (filesNotDeleted > 0) then
+		begin
+			LogMessage('CleanTmp: filesNotDeleted: '+ IntToStr(filesNotDeleted));
+			StringToFile(IndexFilePath, newListFiles, false, true);
+		end else
+		begin
+			LogMessage('CleanTmp: remove: '+ indexFilePath);
+			FileExecute('cmd', ' /C del /Q /F ' + indexFilePath);
+			StringToFile(IndexFilePath, '', false, true);
+		end;
+	end else
+	begin
+		StringToFile(IndexFilePath, '', false, true);
+	end;
+	LogMessage('Exited CleanTmp');
+end;
+
+
 // HTTPS Functions
 function EscapeUriToFileName(URL: AnsiString):String;
 var
@@ -111,10 +229,10 @@ begin
 	Result := outputFilePath;
 end;
 
-function DownloadItem(URL:AnsiString; OutputPath: String; Async: Boolean):Integer;
+function DownloadItem(URL:AnsiString; OutputPath: String; Async, registerDownload: Boolean):Integer;
 var
 	i: integer;
-	CredentialPath: String;
+	CredentialPath, IndexFilePath: String;
 begin
 	if (not FileExists(GetAppPath() + BASE_DOWNLOAD + 'not-delete.me')) then
 	begin
@@ -122,7 +240,8 @@ begin
 		wait (500);
 		StringToFile(GetAppPath() + BASE_DOWNLOAD + 'not-delete.me', 'Questo file serve solo a verificare l''esistenza della folder.' + #13#10 + 'Nel caso mancasse verrà ricreato automaticamente', false, false);
 	end;
-	CredentialPath := BASE_DOWNLOAD + 'AdultDVDEmpire_cred.txt';
+	IndexFilePath := GetAppPath() + BASE_DOWNLOAD + FILE_INDEX_DOWNLOAD;
+	CredentialPath := GetAppPath() + BASE_DOWNLOAD + 'AdultDVDEmpire_cred.txt';
 	if (Length(Trim(URL))>1) then
 	begin
 		if (Pos(' ', URL) > 0) then begin
@@ -130,6 +249,7 @@ begin
 		end;
 		if not(FileExists(OutputPath)) then
 		begin
+			URL := StringReplace(URL, 'http://', 'https://', True, True, False);
 			FileExecute('cmd', '/Q /C start /min curl -s -L -k -b "' + CredentialPath + '" -c "' + CredentialPath + '" -A "' + USER_AGENT + '" "' + URL + '" -o "' + OutputPath + '"');
 			if (not Async) then begin
 				while not(FileExists(OutputPath)) do
@@ -139,12 +259,17 @@ begin
 					If i=INTERNET_TEST_ITERATIONS then
 					begin	//In the images download the scritp can not ask to the user for internet conexion because perhaps the file doesnt exist.
 						LogMessage('	FAIL TO DOWNLOAD ITEM: ' + URL);
+						// LogMessage('cmd /Q /C start /min curl -s -L -k -b "' + CredentialPath + '" -c "' + CredentialPath + '" -A "' + USER_AGENT + '" "' + URL + '" -o "' + OutputPath + '"');
 						Result := 0;
 						exit;
 					end;
 				end;
 			end;
 			Result := 1;
+			if (registerDownload) then
+			begin
+				StringToFile(IndexFilePath, DateToStr(CurrentDateTime()) + '|' + TimeToStr(CurrentDateTime()) + '|' + OutputPath + #13#10, FileExists(indexFilePath), true);
+			end;
 		end else begin
 			Result := 2; // File Exist!
 		end;
@@ -167,7 +292,7 @@ begin
 		Result := outputFilePath;
 	end else
 	begin
-		ret := DownloadItem(URL, outputFilePath, Async);
+		ret := DownloadItem(URL, outputFilePath, Async, true);
 		if (ret > 0) then
 		begin
 			Result := outputFilePath;
@@ -187,7 +312,7 @@ var
 begin
 	LogMessage('DownloadImage: ' + URL);
 	outputFilePath := GetAppPath() + BASE_DOWNLOAD + EscapeUriToFileName(URL);
-	if DownloadItem(URL, outputFilePath, true) > 0 then
+	if DownloadItem(URL, outputFilePath, true, true) > 0 then
 	begin
 		Result := outputFilePath;
 	end else
@@ -196,7 +321,25 @@ begin
 	end;
 end;
 
-//PVD Required Functions
+procedure BypassAgeConfirmation();
+var
+	URL, outputFilePath, CredentialPath: String;
+begin
+	LogMessage('Called BypassAgeConfirmation');
+	CredentialPath := GetAppPath() + BASE_DOWNLOAD + 'AdultDVDEmpire_cred.txt';
+	URL := 'https://www.adultempire.com/Account/AgeConfirmation?ageConfirmationClicked=true';
+	outputFilePath := GetAppPath() + BASE_DOWNLOAD + 'bypassAgeConfirmation.json';
+	DownloadItem(URL, outputFilePath, false, false);
+	FileExecute('cmd', ' /C if exist ' + outputFilePath + ' del /Q /F ' + outputFilePath);
+	LogMessage('BypassAgeConfirmation Complete!');
+end;
+
+// PVD Required Functions
+procedure GetLoginInfo(out URL : AnsiString; out Params : AnsiString);
+begin
+	CleanTmp;
+	BypassAgeConfirmation;
+end;
 function GetScriptVersion: String;
 begin
 	Result := SCRIPT_VERSION;
@@ -307,8 +450,9 @@ var
 	curPos, endPos: Integer;
 	tmp: String;
 begin
-	tmp := 'Label="Title">'
+	tmp := 'Label="Title"'
 	curPos := Pos(tmp, HTML) + Length(tmp);
+	curPos := PosFrom('>', HTML, curPos) + 1;
 	endPos := PosFrom('</', HTML, curPos);
 	if ((curPos > Length(tmp)) and (endPos > 0)) then
 	begin
@@ -349,7 +493,7 @@ begin
 	if (Pos('http', tmp) <= 0) then
 		tmp := BASE_URL + tmp;
 	Result := tmp;
-	LogMessage(' * ParseSearchResult: ' +#13#10+ tmp); 
+	LogMessage(' * GetUrlSearchResult: ' +#13#10+ tmp); 
 end;
 function GetUrlMovieIDSearchResult(HTML: string): AnsiString;
 var
@@ -412,7 +556,7 @@ var
 	tmp, searchStr: String;
 begin
 	LogMessage('Called GetNextPage');
-	searchStr := '<ul class="pagination">'
+	searchStr := '<ul class="pagination'
 	curPos := Pos(searchStr, HTML) + Length(searchStr);
 	if (curPos <= Length(searchStr)) then begin
 		Result := '';
@@ -421,7 +565,7 @@ begin
 		tmp := Trim(Copy(HTML, curPos, endPos - curPos));
 		searchStr := '<li';
 		curPos := LastPos(searchStr, tmp) + Length(searchStr);
-		endPos := PosFrom('</li>', HTML, curPos);
+		endPos := PosFrom('</li>', tmp, curPos);
 		tmp := Trim(Copy(tmp, curPos, endPos - curPos));
 		if (Pos('class="disabled"', tmp) > 0) then begin
 			Result := '';
@@ -440,11 +584,12 @@ end;
 function ParseSearchResults(HTML: string; URL: AnsiString): Cardinal;
 var
 	curPos, endPos, maxI: Integer;
-	row, rowSearch, searchResult: String;
+	searchStr, row, rowSearch, searchResult: String;
 begin
 	LogMessage('Called ParseSearchResults');
 	Result := prError;
-	curPos := Pos('<div class="item-list">', HTML);
+	searchStr := '<div class="item-list">';
+	curPos := Pos(searchStr, HTML) + Length(searchStr);
 	endPos := PosFrom('<div class="list-footer spacing-bottom">', HTML, curPos);
 	if (endPos <= 0) then
 		endPos := PosFrom('<div class="site_footer">', HTML, curPos);
@@ -462,10 +607,11 @@ begin
 	end;
 	while ((curPos > 0) and (curPos < endPos)) do
 	begin
-		// LogMessage('*** ParseSearchResults: curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
+		// LogMessage('*** ParseSearchResults: idx: ' + IntToStr(maxI) + ' - curPos: ' + IntToStr(curPos) + ' - endPos: ' + IntToStr(endPos));
 		row := Trim(Copy(HTML, curPos, endPos - curPos));
 		// LogMessage('**** ParseSearchResults:' + #13#10 + row);
 		searchResult := GetTitleSearchResult(row) + '|' + GetStudioSearchResult(row) + '|' + GetYearSearchResult(row);
+		// LogMessage('**** ParseSearchResults: searchResult:' + searchResult);
 		if (Pos('|', searchResult) > 1) then
 		begin
 			if (Length(SearchResultIndex) > 0) then begin
@@ -492,6 +638,7 @@ begin
 	end else if (maxI > 0) then begin
 		Result := prDownload
 	end;
+	// LogMessage('*** SearchResultIndex: ' + #13#10 + SearchResultIndex + ' ***');
 end;
 
 function ParseSearchResultIndex(): Cardinal;
@@ -904,7 +1051,6 @@ begin
 	LogMessage('Called ParseMoviePage');
 	curPos := Pos('<div id="content">', HTML);
 	endPos := PosFrom('<div class="site_footer">', HTML, curPos);
-	//LogMessage(' * ParseMoviePage * :' +#13#10+ Trim(Copy(HTML, curPos-1, endPos - curPos)));
 	HTML := Trim(Copy(HTML, curPos, endPos - curPos));
 	retStr := GetMovieTitle(HTML);
 	AddFieldValueXML('origtitle', retStr);
@@ -914,7 +1060,6 @@ begin
 	LogMessage('GetMovieYear => ' + retStr);
 	retStr := GetMovieFrontCover(HTML);
 	AddImageURL(imPoster, DownloadImage(retStr));
-	AddImageURL(imFrontCover, DownloadImage(retStr));
 	LogMessage('GetMovieFrontCover => ' + retStr);
 	LogMessage('ParseMovieCasts => ' + IntToStr(ParseMovieCasts(HTML)));
 	LogMessage('ParseMovieDirector => ' + IntToStr(ParseMovieDirector(HTML)));
@@ -954,11 +1099,11 @@ begin
 	AddFieldValueXML('genre', 'Adult');
 	AddFieldValueXML('url', LastUrl);
 end;
-procedure ParsePageRercurse(HTML: string; URL: AnsiString);
+procedure ParsePageRecurse(HTML: string; URL: AnsiString);
 begin
 	if (Mode = smSearch) then
 	begin
-		LogMessage('Called ParsePage - Search Mode');
+		LogMessage('Called ParsePageRecurse - Search Mode');
 		if ((Length(URL) > 0) and (Length(HTML) <= 0)) then begin
 			HTML := FileToString(DownloadPage(URL, false, false));
 			URL := '';
@@ -969,7 +1114,7 @@ begin
 		if (idxSearchPage < MAX_SEARCH_PAGES) then
 			URL := GetNextPage(HTML);
 		if (Length(URL) > 0) then begin
-			ParsePageRercurse('', URL);
+			ParsePageRecurse('', URL);
 		end;
 	end;
 end;
@@ -986,16 +1131,24 @@ begin
 		ParseSearchResults(HTML, URL);
 		idxSearchPage := idxSearchPage + 1;
 		LogMessage('* Page searched: ' + IntToStr(idxSearchPage) + ' *');
-		if (idxSearchPage < MAX_SEARCH_PAGES) then
-			URL := GetNextPage(HTML);
-		if (Length(URL) > 0) then begin
-			ParsePageRercurse('', URL);
-		end;
-		Result := ParseSearchResultIndex();
-		if (Result = prDownload) then begin
+		if (Pos('No Results Found', HTML) > 0) then
+		begin
+			Result := prFinished;
 			Mode := smNormal;
-		end else begin
-			Mode := smDummy;
+			LogMessage('Finish - No Results Found');
+		end else
+		begin
+			if (idxSearchPage < MAX_SEARCH_PAGES) then
+				URL := GetNextPage(HTML);
+			if (Length(URL) > 0) then begin
+				ParsePageRecurse('', URL);
+			end;
+			Result := ParseSearchResultIndex();
+			if (Result = prDownload) then begin
+				Mode := smNormal;
+			end else begin
+				Mode := smDummy;
+			end;
 		end;
 	end else if (Mode = smDummy) then		
 	begin
